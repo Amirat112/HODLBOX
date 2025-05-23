@@ -124,3 +124,112 @@
     )
   )
 )
+
+;; Withdraw from vault
+(define-public (withdraw (amount uint))
+  (let (
+    (sender tx-sender)
+    (vault (get-vault sender))
+    (vault-balance (get balance vault))
+    (unlock-height (get unlock-height vault))
+  )
+    ;; Check if vault exists
+    (asserts! (vault-exists sender) ERR_NO_VAULT)
+
+    ;; Check if amount is valid
+    (asserts! (<= amount vault-balance) ERR_INSUFFICIENT_FUNDS)
+
+    ;; Check if vault is unlocked
+    (asserts! (is-vault-unlocked sender) ERR_VAULT_LOCKED)
+
+    ;; Transfer STX from contract to sender
+    (try! (as-contract (stx-transfer? amount tx-sender sender)))
+
+    ;; Update vault balance
+    (if (is-eq amount vault-balance)
+      ;; If withdrawing entire balance, delete vault
+      (map-delete vaults { owner: sender })
+      ;; Otherwise update balance
+      (map-set vaults
+        { owner: sender }
+        {
+          balance: (- vault-balance amount),
+          unlock-height: unlock-height,
+          beneficiary: (get beneficiary vault)
+        }
+      )
+    )
+
+    (ok true)
+  )
+)
+
+;; Set beneficiary for emergency access
+(define-public (set-beneficiary (beneficiary-address principal))
+  (let (
+    (sender tx-sender)
+    (vault (get-vault sender))
+  )
+    ;; Check if vault exists
+    (asserts! (vault-exists sender) ERR_NO_VAULT)
+
+    ;; Validate beneficiary address
+    ;; Ensure beneficiary is not the same as owner
+    (asserts! (not (is-eq beneficiary-address sender)) ERR_INVALID_BENEFICIARY)
+
+    ;; Ensure beneficiary is not already set or is the same
+    (asserts! (or
+        (is-none (get beneficiary vault))
+        (is-eq (some beneficiary-address) (get beneficiary vault))
+      )
+      ERR_BENEFICIARY_ALREADY_SET
+    )
+
+    ;; Update vault with beneficiary
+    (map-set vaults
+      { owner: sender }
+      {
+        balance: (get balance vault),
+        unlock-height: (get unlock-height vault),
+        beneficiary: (some beneficiary-address)
+      }
+    )
+
+    (ok true)
+  )
+)
+
+;; Beneficiary withdrawal
+(define-public (beneficiary-withdraw (vault-owner principal))
+  (let (
+    (sender tx-sender)
+    (vault (get-vault vault-owner))
+    (vault-balance (get balance vault))
+    (vault-beneficiary (get beneficiary vault))
+  )
+    ;; Check if vault exists
+    (asserts! (vault-exists vault-owner) ERR_NO_VAULT)
+
+    ;; Check if beneficiary is set and matches sender
+    (asserts! (and
+      (is-some vault-beneficiary)
+      (is-eq (some sender) vault-beneficiary)
+    ) ERR_UNAUTHORIZED)
+
+    ;; Check if vault is unlocked
+    (asserts! (is-vault-unlocked vault-owner) ERR_VAULT_LOCKED)
+
+    ;; Transfer STX from contract to beneficiary
+    (try! (as-contract (stx-transfer? vault-balance tx-sender sender)))
+
+    ;; Delete vault after complete withdrawal
+    (map-delete vaults { owner: vault-owner })
+
+    (ok true)
+  )
+)
+
+;; Get contract balance (for testing)
+(define-read-only (get-contract-balance)
+  (stx-get-balance (as-contract tx-sender))
+)
